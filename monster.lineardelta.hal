@@ -1,0 +1,392 @@
+# #######################################
+#
+# HAL file for BeagleBone + BeBoPr cape with 4 steppers
+#
+# Derived from example hm2-stepper config
+#
+# ########################################
+
+
+# ###################################
+# Core EMC/HAL Loads
+# ###################################
+
+# kinematics
+#loadrt trivkins
+loadrt lineardeltakins 
+
+# settings for delta printer
+setp lineardeltakins.L [MACHINE]CF_ROD
+setp lineardeltakins.R [MACHINE]DELTA_R
+
+# motion controller, get name and thread periods from ini file
+loadrt [EMCMOT]EMCMOT base_period_nsec=[EMCMOT]BASE_PERIOD servo_period_nsec=[EMCMOT]SERVO_PERIOD num_joints=[TRAJ]AXES
+
+# load low-level drivers
+loadrt hal_parport cfg="0x278 out"
+loadrt stepgen step_type=0,0,0,0
+loadrt pwmgen output_type=1,1,1
+loadrt pid num_chan=2
+loadrt limit1 count=2
+
+# hook its functions to realtime threads
+addf parport.0.read base-thread
+addf stepgen.make-pulses base-thread
+addf pwmgen.make-pulses base-thread
+addf parport.0.write base-thread
+
+addf stepgen.capture-position servo-thread
+addf motion-command-handler servo-thread
+addf motion-controller servo-thread
+addf stepgen.update-freq servo-thread
+addf pwmgen.update servo-thread
+
+
+# Python user-mode HAL module to read ADC value and generate a thermostat output for PWM
+# t = Thermistor table (only epcos_B57560G1104 or 1 supported for now)
+# a = analog input channel
+loadusr -Wn Therm ./ReadTemp.py -n Therm --num_chan 2 -t 1 1 -a 4 5
+
+#used for comparing temperature set value with actual for waiting on temperature
+loadrt wcomp count=1
+# Initialize the sum2
+loadrt sum2 count=2
+
+# ################################################
+# THREADS
+# ################################################
+
+addf pid.0.do-pid-calcs                   servo-thread
+addf pid.1.do-pid-calcs                   servo-thread
+addf limit1.0                             servo-thread
+addf limit1.1                             servo-thread
+
+addf wcomp.0                              servo-thread
+addf sum2.0                               servo-thread
+addf sum2.1                               servo-thread
+  
+# net xdir	=> parport.0.pin-01-out
+# net head-pwm	=> parport.0.pin-02-out
+# net zstep	=> parport.0.pin-03-out
+# net xenable	=> parport.0.pin-04-out
+# net zenable	=> parport.0.pin-05-out
+# net zdir	=> parport.0.pin-06-out
+# net ydir	=> parport.0.pin-07-out
+# net adir	=> parport.0.pin-08-out
+# net astep	=> parport.0.pin-09-out
+# net ystep	=> parport.0.pin-14-out
+# net xstep	=> parport.0.pin-16-out
+# net yenable	=> parport.0.pin-17-out
+
+# net xhome	<= parport.0.pin-10-in-not
+# net yhome	<= parport.0.pin-11-in-not
+# net zhome	<= parport.0.pin-12-in-not
+
+net probe-in	<= parport.0.pin-13-in
+#net motion.probe-input <= probe-in
+     
+
+# ######################################################
+# Axis-of-motion Specific Configs (not the GUI)
+# ######################################################
+
+
+# ################
+# X [0] Axis = column C
+# ################
+
+# axis enable chain
+newsig emcmot.00.enable bit
+sets emcmot.00.enable FALSE
+
+net emcmot.00.enable 	<= axis.0.amp-enable-out 
+net emcmot.00.enable => stepgen.0.enable 
+net emcmot.00.enable => parport.0.pin-17-out
+
+
+# position command and feedback
+net emcmot.00.pos-cmd 	<= axis.0.motor-pos-cmd
+net emcmot.00.pos-cmd 	=> stepgen.0.position-cmd
+
+net motor.00.pos-fb 	<= stepgen.0.position-fb
+net motor.00.pos-fb 	=> axis.0.motor-pos-fb
+
+
+# timing parameters
+setp stepgen.0.dirsetup        [AXIS_0]DIRSETUP
+setp stepgen.0.dirhold         [AXIS_0]DIRHOLD
+
+setp stepgen.0.steplen         [AXIS_0]STEPLEN
+setp stepgen.0.stepspace       [AXIS_0]STEPSPACE
+
+setp stepgen.0.position-scale  [AXIS_0]SCALE
+
+setp stepgen.0.maxvel          [AXIS_0]STEPGEN_MAX_VEL
+setp stepgen.0.maxaccel        [AXIS_0]STEPGEN_MAX_ACC
+
+net xstep 	=> parport.0.pin-14-out
+net xdir 	=> parport.0.pin-07-out
+net xhome 	<= parport.0.pin-11-in-not
+
+net xstep <= stepgen.0.step 	
+net xdir <= stepgen.0.dir
+net xhome => axis.0.home-sw-in 	
+
+# ################
+# Y [1] Axis = column A
+# ################
+
+# axis enable chain
+newsig emcmot.01.enable bit
+sets emcmot.01.enable FALSE
+
+net emcmot.01.enable <= axis.1.amp-enable-out 
+net emcmot.01.enable stepgen.1.enable => parport.0.pin-04-out
+
+# position command and feedback
+net emcmot.01.pos-cmd <= axis.1.motor-pos-cmd
+net emcmot.01.pos-cmd => stepgen.1.position-cmd
+
+net motor.01.pos-fb <= stepgen.1.position-fb
+net motor.01.pos-fb => axis.1.motor-pos-fb
+
+
+# timing parameters
+setp stepgen.1.dirsetup        [AXIS_1]DIRSETUP
+setp stepgen.1.dirhold         [AXIS_1]DIRHOLD
+
+setp stepgen.1.steplen         [AXIS_1]STEPLEN
+setp stepgen.1.stepspace       [AXIS_1]STEPSPACE
+
+setp stepgen.1.position-scale  [AXIS_1]SCALE
+
+setp stepgen.1.maxvel          [AXIS_1]STEPGEN_MAX_VEL
+setp stepgen.1.maxaccel        [AXIS_1]STEPGEN_MAX_ACC
+
+
+net ystep => parport.0.pin-16-out
+net ydir => parport.0.pin-01-out
+net yhome <= parport.0.pin-10-in-not
+
+net ystep <= stepgen.1.step 	
+net ydir <= stepgen.1.dir
+net yhome => axis.1.home-sw-in
+
+
+
+# ################
+# Z [2] Axis = column B
+# ################
+
+# axis enable chain
+newsig emcmot.02.enable bit
+sets emcmot.02.enable FALSE
+
+net emcmot.02.enable <= axis.2.amp-enable-out 
+net emcmot.02.enable stepgen.2.enable => parport.0.pin-05-out
+net emcmot.02.enable stepgen.3.enable
+
+# position command and feedback
+net emcmot.02.pos-cmd <= axis.2.motor-pos-cmd
+net emcmot.02.pos-cmd => stepgen.2.position-cmd
+
+net motor.02.pos-fb <= stepgen.2.position-fb
+net motor.02.pos-fb => axis.2.motor-pos-fb
+
+
+# timing parameters
+setp stepgen.2.dirsetup        [AXIS_2]DIRSETUP
+setp stepgen.2.dirhold         [AXIS_2]DIRHOLD
+
+setp stepgen.2.steplen         [AXIS_2]STEPLEN
+setp stepgen.2.stepspace       [AXIS_2]STEPSPACE
+
+setp stepgen.2.position-scale  [AXIS_2]SCALE
+
+setp stepgen.2.maxvel          [AXIS_2]STEPGEN_MAX_VEL
+setp stepgen.2.maxaccel        [AXIS_2]STEPGEN_MAX_ACC
+
+net zstep 	=> parport.0.pin-03-out
+net zdir 	=> parport.0.pin-06-out
+net zhome 	<= parport.0.pin-12-in-not
+
+net zstep <= stepgen.2.step 	
+net zdir <= stepgen.2.dir
+net zhome => axis.2.home-sw-in axis.3.home-sw-in
+
+
+# ################
+# A [3] Axis (Extruder)
+# ################
+
+# axis enable chain
+newsig emcmot.03.enable bit
+sets emcmot.03.enable FALSE
+
+net emcmot.03.enable <= axis.3.amp-enable-out 
+#net emcmot.03.enable => stepgen.3.enable
+
+
+# position command and feedback
+net emcmot.03.pos-cmd <= axis.3.motor-pos-cmd
+net emcmot.03.pos-cmd => stepgen.3.position-cmd
+
+net motor.03.pos-fb <= stepgen.3.position-fb
+net motor.03.pos-fb => axis.3.motor-pos-fb
+
+
+# timing parameters
+setp stepgen.3.dirsetup        [AXIS_3]DIRSETUP
+setp stepgen.3.dirhold         [AXIS_3]DIRHOLD
+
+setp stepgen.3.steplen         [AXIS_3]STEPLEN
+setp stepgen.3.stepspace       [AXIS_3]STEPSPACE
+
+setp stepgen.3.position-scale  [AXIS_3]SCALE
+
+setp stepgen.3.maxvel          [AXIS_3]STEPGEN_MAX_VEL
+setp stepgen.3.maxaccel        [AXIS_3]STEPGEN_MAX_ACC
+
+net astep => parport.0.pin-09-out
+net adir => parport.0.pin-08-out
+
+net astep <= stepgen.3.step 	
+net adir <= stepgen.3.dir 	
+
+
+# ##################################################
+# Standard I/O - EStop, Enables, Limit Switches, Etc
+# ##################################################
+
+# create a signal for the estop loopback
+net estop-loop iocontrol.0.user-enable-out => iocontrol.0.emc-enable-in
+
+# create signals for tool loading loopback
+net tool-prep-loop iocontrol.0.tool-prepare => iocontrol.0.tool-prepared
+net tool-change-loop iocontrol.0.tool-change => iocontrol.0.tool-changed
+
+# ##################################################
+# PWM and Temperature Signals
+# ##################################################
+
+# Define signals to use elsewhere (ie: M1xx codes)
+# If you change any names here, lots of things will break!
+newsig e0.temp.set   float
+newsig e0.temp.meas  float
+newsig bed.temp.set  float
+newsig bed.temp.meas float
+newsig fan.speed.set float
+
+# print head heater pwm
+net head-pwm => parport.0.pin-02-out
+net head-pwm <= pwmgen.0.pwm
+setp pwmgen.0.pwm-freq    10.0
+setp pwmgen.0.enable    1
+setp pwmgen.0.value     0.0
+
+#signals for comparing set value and actual value of temperature
+#newsig M209_set_temp             float
+newsig sub_temp_min               float
+newsig add_temp_max               float
+newsig e0_temp_within_range       bit
+
+#set boundaries with sum2 +1 and -1 of the wanted temperature
+sets add_temp_max 1
+sets sub_temp_min -1
+
+net e0.temp.set  => sum2.0.in0
+setp sum2.0.in1 2
+#net add_temp_max.out => sum2.0.in1
+
+net e0.temp.set  => sum2.1.in0
+setp sum2.1.in1 -2
+#net sub_temp_min.out => sum2.1.in1
+
+#the values will be given to the wcomp.0 function
+net minboundary sum2.1.out => wcomp.0.min
+net maxboundary sum2.0.out => wcomp.0.max
+net e0.temp.meas => wcomp.0.in
+
+#the output of wcomp.0 will say if measured temperature is in range of set value
+#this needs to be coupled to a digital input for M66 readout
+net e0_temp_within_range wcomp.0.out => motion.digital-in-00
+
+# PID for Extruder 0 temperature control
+net e0.temp.meas    <= Therm.temp0
+net e0.temp.meas    => pid.0.feedback
+
+sets e0.temp.set  0
+net e0.temp.set     => pid.0.command
+
+net e0.heater  <= pid.0.output
+net e0.heater  => limit1.0.in
+net e0.heaterl <= limit1.0.out
+net e0.heaterl => pwmgen.0.value
+
+# no longer J3 E1 Heater PRU1.out0
+# instead used for FAN control
+# we use scale 255 for compatibility with slicing software
+# fan pwm
+net fan-pwm <= pwmgen.1.pwm
+# net fan-pwm => parport.0.pin-99-out
+setp pwmgen.1.pwm-freq		60.0
+setp pwmgen.1.value		0.0
+setp pwmgen.1.scale		255
+setp pwmgen.1.enable		1
+
+#linking motion.analog-out-00 to fan speed.set.signal
+net fan.speed.set <= motion.analog-out-00
+net fan.speed.set => pwmgen.1.value
+
+
+
+# J4 Bed Heater GPIO2.16
+# bed heater pwm
+net bed-pwm <= pwmgen.2.pwm
+# net bed-pwm => parport.0.pin-99-out
+setp pwmgen.2.pwm-freq		10.0
+setp pwmgen.2.value		0.0
+setp pwmgen.2.enable		1
+
+# Limit heater PWM to positive values
+# PWM mimics hm2 implementation, which generates output for negative values
+setp limit1.0.min 0
+
+# PID for Bed temperature control
+net bed.temp.meas    <= Therm.temp1
+net bed.temp.meas    => pid.1.feedback
+
+sets bed.temp.set  0
+net bed.temp.set     => pid.1.command
+
+net bed.heater  <= pid.1.output
+net bed.heater  => limit1.1.in
+net bed.heaterl <= limit1.1.out
+net bed.heaterl => pwmgen.2.value
+
+# Limit heater PWM to positive values
+# PWM mimics hm2 implementation, which generates output for negative values
+setp limit1.1.min 0
+
+# PID Parameters for adjusting temperature control
+# Extruder
+#setp pid.0.FF0      0  
+#setp pid.0.FF1      0  
+#setp pid.0.FF2      0  
+setp pid.0.Pgain  0.30
+setp pid.0.Igain  0.00001
+setp pid.0.Dgain  0.9375
+setp pid.0.maxerrorI 1.0
+setp pid.0.bias    0.5  
+setp pid.0.enable   1
+
+# Bed
+#setp pid.1.FF0      0  
+#setp pid.1.FF1      0  
+#setp pid.1.FF2      0  
+setp pid.1.Pgain  1
+setp pid.1.Igain  0.0
+setp pid.1.Dgain  0.0
+setp pid.1.maxerrorI 1.0
+setp pid.1.bias    0.5  
+setp pid.1.enable   1
